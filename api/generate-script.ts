@@ -1,32 +1,29 @@
-import express from "express";
-import { createServer as createViteServer } from "vite";
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from "@google/genai";
-import dotenv from "dotenv";
 
-dotenv.config();
+const MAX_CONTENT_LENGTH = 50000;
 
-const app = express();
-const PORT = 3000;
-
-app.use(express.json({ limit: '10mb' }));
-
-const getAI = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not defined. Add it to your .env file.");
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
-  return new GoogleGenAI({ apiKey });
-};
 
-// API Routes (local dev only - on Vercel these are handled by api/ directory)
-app.post("/api/generate-script", async (req, res) => {
   try {
     const { blogContent } = req.body;
     if (!blogContent || typeof blogContent !== 'string') {
       return res.status(400).json({ error: "Content is required" });
     }
 
-    const ai = getAI();
+    if (blogContent.length > MAX_CONTENT_LENGTH) {
+      return res.status(400).json({ error: `Content too long (max ${MAX_CONTENT_LENGTH} characters)` });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Server configuration error" });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
     const model = "gemini-2.5-flash-preview-05-20";
 
     const response = await ai.models.generateContent({
@@ -94,78 +91,9 @@ app.post("/api/generate-script", async (req, res) => {
       return res.status(500).json({ error: "Invalid response format from AI model" });
     }
 
-    res.json(parsed);
+    return res.json(parsed);
   } catch (error) {
     console.error("Script generation error:", error);
-    res.status(500).json({ error: "Failed to generate script" });
+    return res.status(500).json({ error: "Failed to generate script" });
   }
-});
-
-app.post("/api/generate-image", async (req, res) => {
-  try {
-    const { prompt, scriptContext } = req.body;
-    if (!prompt || typeof prompt !== 'string') {
-      return res.status(400).json({ error: "Prompt is required" });
-    }
-
-    const ai = getAI();
-    const model = "gemini-2.0-flash-exp";
-
-    const safeContext = typeof scriptContext === 'string' ? scriptContext.slice(0, 2000) : '';
-
-    const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          {
-            text: `Create a high-quality, vibrant, and detailed comic book illustration.
-            CONTEXT (Voice-over script): "${safeContext}"
-            VISUAL DESCRIPTION TO ILLUSTRATE: ${prompt}
-
-            REQUIREMENTS:
-            - The image MUST perfectly match the action described in the context and visual description.
-            - MAIN CHARACTER: A simple black stickman with a white, highly expressive head.
-            - STYLE: Modern digital comic illustration, clean lines, vibrant colors, detailed and professional backgrounds.
-            - ASPECT RATIO: 16:9 cinematic.`,
-          },
-        ],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9",
-          imageSize: "1K",
-        },
-      },
-    });
-
-    if (!response.candidates?.[0]?.content?.parts) {
-      return res.status(500).json({ error: "No image generated" });
-    }
-
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        return res.json({ imageUrl: `data:image/png;base64,${part.inlineData.data}` });
-      }
-    }
-
-    res.status(500).json({ error: "No image data found" });
-  } catch (error) {
-    console.error("Image generation error:", error);
-    res.status(500).json({ error: "Failed to generate image" });
-  }
-});
-
-// Vite middleware for local development only
-async function startServer() {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
-  app.use(vite.middlewares);
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
 }
-
-startServer();
